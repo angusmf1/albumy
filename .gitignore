@@ -82,6 +82,7 @@ celerybeat-schedule
 *.sage.py
 
 # Environments
+echo "credentials.env" >> .gitignore
 .env
 .venv
 env/

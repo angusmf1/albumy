@@ -21,6 +21,7 @@ from albumy.models import User, Photo, Tag, Follow, Collect, Comment, Notificati
 from albumy.notifications import push_comment_notification, push_collect_notification
 from albumy.utils import rename_image, resize_image, redirect_back, flash_errors
 
+# additional imports
 import http.client, urllib.request, urllib.parse, urllib.error, base64, json
 import os
 from dotenv import load_dotenv
@@ -46,7 +47,6 @@ def index():
          # Check the description for each photo
         for photo in photos:
             photo.description = check_description(photo.id)
-
 
     else:
         pagination = None
@@ -172,11 +172,11 @@ def show_photo(photo_id):
     tag_form = TagForm()
 
 
-    # add in AI generated caption if none exists
+    # add in AI generated caption if none exists or is deleted
     photo.description = check_description(photo.id)
     description_form.description.data = photo.description
 
-    # add in AI generated tag if none exists
+    # add in AI generated tag if none exists or is deleted
     tag_name = add_tag(photo.id)
     tag_form.tag.data = tag_name
 

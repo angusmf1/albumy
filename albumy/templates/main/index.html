@@ -30,7 +30,9 @@
                                 <a class="thumbnail" href="{{ url_for('.show_photo', photo_id=photo.id) }}"
                                    target="_blank">
                                     <img class="img-fluid"
-                                         src="{{ url_for('.get_image', filename=photo.filename_m) }}">
+                                         src="{{ url_for('.get_image', filename=photo.filename_m) }}"
+                                         alt="{{photo.description}}"
+                                         >
                                 </a>
                             </div>
                         </div>
@@ -89,7 +91,8 @@
     <div class="jumbotron">
         <div class="row">
             <div class="col-md-8">
-                <img src="{{ url_for('static', filename='images/index.jpg') }}" class="rounded img-fluid">
+                <img src="{{ url_for('static', filename='images/index.jpg') }}" class="rounded img-fluid"
+                alt="{{ photo.description}}">
             </div>
             <div class="col-md-4 align-self-center">
                 <h1>Albumy</h1>

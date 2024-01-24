@@ -4,6 +4,8 @@
     :url: http://greyli.com
     :copyright: © 2018 Grey Li <withlihui@gmail.com>
     :license: MIT, see LICENSE for more details.
+
+    Modified by Angus Ferrell
 """
 import os
 
@@ -19,6 +21,10 @@ from albumy.models import User, Photo, Tag, Follow, Collect, Comment, Notificati
 from albumy.notifications import push_comment_notification, push_collect_notification
 from albumy.utils import rename_image, resize_image, redirect_back, flash_errors
 
+import http.client, urllib.request, urllib.parse, urllib.error, base64, json
+import os
+from dotenv import load_dotenv
+
 main_bp = Blueprint('main', __name__)
 
 
@@ -27,15 +33,25 @@ def index():
     if current_user.is_authenticated:
         page = request.args.get('page', 1, type=int)
         per_page = current_app.config['ALBUMY_PHOTO_PER_PAGE']
+
+
+
         pagination = Photo.query \
             .join(Follow, Follow.followed_id == Photo.author_id) \
             .filter(Follow.follower_id == current_user.id) \
             .order_by(Photo.timestamp.desc()) \
             .paginate(page, per_page)
         photos = pagination.items
+
+         # Check the description for each photo
+        for photo in photos:
+            photo.description = check_description(photo.id)
+
+
     else:
         pagination = None
         photos = None
+
     tags = Tag.query.join(Tag.photos).group_by(Tag.id).order_by(func.count(Photo.id).desc()).limit(10)
     return render_template('main/index.html', pagination=pagination, photos=photos, tags=tags, Collect=Collect)
 
@@ -133,6 +149,13 @@ def upload():
         )
         db.session.add(photo)
         db.session.commit()
+
+        # After the photo is uploaded and saved, check and update its description
+        photo.description = check_description(photo.id)
+
+        # After the photo is uploaded and saved, add tags to the photo
+        add_tag(photo.id)
+
     return render_template('main/upload.html')
 
 
@@ -148,7 +171,16 @@ def show_photo(photo_id):
     description_form = DescriptionForm()
     tag_form = TagForm()
 
+
+    # add in AI generated caption if none exists
+    photo.description = check_description(photo.id)
     description_form.description.data = photo.description
+
+    # add in AI generated tag if none exists
+    tag_name = add_tag(photo.id)
+    tag_form.tag.data = tag_name
+
+
     return render_template('main/photo.html', photo=photo, comment_form=comment_form,
                            description_form=description_form, tag_form=tag_form,
                            pagination=pagination, comments=comments)
@@ -399,3 +431,149 @@ def delete_tag(photo_id, tag_id):
 
     flash('Tag deleted.', 'info')
     return redirect(url_for('.show_photo', photo_id=photo_id))
+
+
+
+# get image path
+@main_bp.route('/uploads/<path:filename>')
+def get_image_path(filename):
+    return os.path.join(current_app.config['ALBUMY_UPLOAD_PATH'], filename)
+
+
+# add description to photo using ML API if none exists
+@main_bp.route('/photo/<int:photo_id>')
+def check_description(photo_id):
+    photo = Photo.query.get_or_404(photo_id)
+
+    # If the photo doesn't have a description, get a caption from the API
+    if not photo.description:
+        filepath = get_image_path(photo.filename)
+
+        # Now you can open the saved image file
+        with open(filepath, 'rb') as f:
+            picture = f.read()
+
+        # Load environment variables from 'credentials.env'
+        load_dotenv(dotenv_path='credentials.env')
+
+        endpoint = os.getenv('AZURE_ENDPOINT')
+        key = os.getenv('AZURE_KEY')    
+
+        headers = {
+            # Request headers
+            'Content-Type': 'application/octet-stream',
+            'Ocp-Apim-Subscription-Key': key,
+        }
+
+        params = urllib.parse.urlencode({
+            # Request parameters
+            'features': 'caption',
+            'language': 'en',
+            'gender-neutral-caption': 'False',
+        })
+
+        try:
+            conn = http.client.HTTPSConnection(endpoint)
+            conn.request("POST", "/computervision/imageanalysis:analyze?api-version=2023-02-01-preview&%s" % params, picture, headers)
+            response = conn.getresponse()
+            data = response.read()
+            # Convert bytes to string using decode
+            str_data = data.decode("utf-8")
+
+            # Parse the JSON data
+            parsed_data = json.loads(str_data)
+
+            # Now you can access the values in the JSON data
+            photo.description = parsed_data["captionResult"]["text"]
+            db.session.commit()  # Commit the changes to the database
+            conn.close()
+
+        except Exception as e:
+            print("exception")
+
+    return photo.description
+
+
+
+
+# add tags to photos using ML API
+@main_bp.route('/add/tag/<int:photo_id>', methods=['POST'])
+@login_required
+def add_tag(photo_id):
+    photo = Photo.query.get_or_404(photo_id)
+
+    # Get the image path
+    filepath = get_image_path(photo.filename)
+
+    # Open the saved image file
+    with open(filepath, 'rb') as f:
+        picture = f.read()
+
+    # Load environment variables from 'credentials.env'
+        load_dotenv(dotenv_path='credentials.env')
+
+        endpoint = os.getenv('AZURE_ENDPOINT')
+        key = os.getenv('AZURE_KEY')     
+
+    headers = {
+        # Request headers
+        'Content-Type': 'application/octet-stream',
+        'Ocp-Apim-Subscription-Key': key,
+    }
+
+    params = urllib.parse.urlencode({
+        # Request parameters
+        'features': 'tags',
+        'language': 'en',
+        'gender-neutral-caption': 'False',
+    })
+
+    try:
+        conn = http.client.HTTPSConnection(endpoint)
+        conn.request("POST", "/computervision/imageanalysis:analyze?api-version=2023-02-01-preview&%s" % params, picture, headers)
+        response = conn.getresponse()
+        data = response.read()
+        # Convert bytes to string using decode
+        str_data = data.decode("utf-8")
+
+        # Parse the JSON data
+        parsed_data = json.loads(str_data)
+
+        # Now you can access the values in the JSON data
+        tags_raw = [tag["name"] for tag in parsed_data["tagsResult"]["values"]]
+        tags_string = json.dumps(tags_raw)
+
+        # Add each tag from the Azure API to the photo's tags
+        for name in tags_raw:
+            existing_tag = Tag.query.filter_by(name=name).first()
+            if existing_tag is None:
+                # If not, create a new tag with the name
+                new_tag = Tag(name=name)
+                db.session.add(new_tag)
+                db.session.commit()
+                existing_tag = new_tag
+
+            # Add the tag to the photo's tags, if it's not already there
+            if existing_tag not in photo.tags:
+                photo.tags.append(existing_tag)
+                db.session.commit()
+
+    except Exception as e:
+        print('Exception')
+
+    return redirect(url_for('.show_photo', photo_id=photo_id))
+ 
+# check all photos to add description
+@main_bp.route('/')
+def check():
+    # Get all photos
+    photos = Photo.query.all()
+
+    # Check and update the description and tags for each photo
+    for photo in photos:
+        photo.description = check_description(photo.id)
+
+
+        
+
+     
